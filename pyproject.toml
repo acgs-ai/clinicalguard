@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 authors = [{name = "ACGS Team", email = "hello@acgs.dev"}]
 dependencies = [
-    "acgs-lite>=2.7.2",
+    "acgs-lite>=2.5",
     "starlette>=0.37",
     "uvicorn[standard]>=0.29",
     "pyyaml>=6.0",
