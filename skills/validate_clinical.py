@@ -10,7 +10,7 @@ The LLM layer handles what rule-based software cannot (novel clinical scenarios,
 semantic reasoning). The GovernanceEngine handles what LLMs should not be trusted
 to do alone (cryptographic audit, MACI enforcement, reproducible rule checks).
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -24,9 +24,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+try:
+    import braintrust
+except ImportError:
+    braintrust = None
+
+
+def braintrust_traced(*args, **kwargs):
+    if braintrust:
+        return braintrust.traced(*args, **kwargs)
+    return lambda f: f
+
+
 from acgs_lite.audit import AuditEntry, AuditLog
 from acgs_lite.engine import GovernanceEngine
 from acgs_lite.maci import MACIRole
+from clinicalguard.skills.healthcare_validators import redact_phi_text
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +133,18 @@ async def _call_llm_anthropic_api(action_text: str) -> dict[str, Any]:
     model = os.environ.get("CLINICALGUARD_MODEL", "claude-haiku-4-5")
     prompt = _CLINICAL_PROMPT_TEMPLATE.format(action_text=action_text)
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    _bt_key = os.environ.get("BRAINTRUST_API_KEY", "")
+    _use_gateway = bool(_bt_key) and os.environ.get("BRAINTRUST_GATEWAY", "").lower() in (
+        "1",
+        "true",
+    )
+    if _use_gateway:
+        client = anthropic.AsyncAnthropic(
+            api_key=_bt_key,
+            base_url="https://gateway.braintrust.dev",
+        )
+    else:
+        client = anthropic.AsyncAnthropic(api_key=api_key)
     response = await client.messages.create(
         model=model,
         max_tokens=512,
@@ -147,66 +171,35 @@ async def _call_llm_pi_rpc(action_text: str) -> dict[str, Any]:
     pi_binary = os.environ.get("PI_BINARY") or shutil.which("pi") or "pi"
     prompt = _CLINICAL_PROMPT_TEMPLATE.format(action_text=action_text)
 
-    proc = await asyncio.create_subprocess_exec(
-        pi_binary,
-        "--mode",
-        "rpc",
-        "--no-session",
+    # Use echo to pipe the prompt into pi to avoid any shell/stdin weirdness
+    proc = await asyncio.create_subprocess_shell(
+        f"{pi_binary} --print --provider google --model gemini-2.5-flash",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
     )
 
-    cmd = json.dumps({"type": "prompt", "message": prompt}) + "\n"
-    proc.stdin.write(cmd.encode())
-    await proc.stdin.drain()
+    stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=30.0)
 
-    collected: list[str] = []
-    buffer = b""
+    full_text = stdout.decode("utf-8").strip()
 
-    assert proc.stdout is not None
-    try:
-        while True:
-            chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=30.0)
-            if not chunk:
-                break
-            buffer += chunk
-            while b"\n" in buffer:
-                line_bytes, buffer = buffer.split(b"\n", 1)
-                line = line_bytes.decode("utf-8", errors="replace").rstrip("\r")
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                etype = event.get("type", "")
-                if etype == "message_update":
-                    delta = event.get("assistantMessageEvent", {})
-                    if delta.get("type") == "text_delta":
-                        collected.append(delta["delta"])
-                elif etype == "agent_end":
-                    break
-            else:
-                continue
-            break
-    finally:
-        try:
-            proc.stdin.close()
-        except OSError:
-            pass  # stdin may already be closed
-        if proc.returncode is None:
-            proc.kill()
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except (TimeoutError, OSError):
-            pass  # best-effort cleanup
+    if not full_text:
+        logger.error(f"PI returned empty output. Stderr: {stderr.decode('utf-8').strip()}")
+        raise ValueError("Empty response from LLM")
 
-    full_text = "".join(collected).strip()
     if full_text.startswith("```"):
         lines = full_text.split("\n")
-        full_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(full_text)
+        # Remove the first line (e.g. ```json) and the last line (```)
+        if len(lines) > 2 and lines[-1].strip() == "```":
+            full_text = "\n".join(lines[1:-1])
+        else:
+            full_text = "\n".join(lines[1:])
+
+    try:
+        return json.loads(full_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse LLM JSON response: {full_text}")
+        raise e
 
 
 def _pi_available() -> bool:
@@ -216,14 +209,43 @@ def _pi_available() -> bool:
     return bool(os.environ.get("PI_BINARY") or shutil.which("pi"))
 
 
+@braintrust_traced
 async def get_llm_assessment(action_text: str) -> LLMClinicalAssessment:
     """Get LLM clinical assessment.
 
     Provider selection (in order):
-      1. ANTHROPIC_API_KEY set  → direct Anthropic API  (production / Fly.io)
-      2. pi binary available    → pi RPC subprocess     (local dev / demo)
+      1. If CLINICALGUARD_ENABLE_EXTERNAL_CLINICAL_LLM=true and ANTHROPIC_API_KEY set
+         → direct Anthropic API  (opt-in external reasoning)
+      2. If CLINICALGUARD_ENABLE_EXTERNAL_CLINICAL_LLM=true and pi binary available
+         → pi RPC subprocess     (opt-in external/local hybrid reasoning)
       3. fallback               → constitutional rules only
     """
+    external_llm_enabled = os.environ.get(
+        "CLINICALGUARD_ENABLE_EXTERNAL_CLINICAL_LLM", ""
+    ).lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if os.environ.get("ENVIRONMENT", "").lower() == "production" and external_llm_enabled:
+        logger.error("External clinical LLM is not permitted in production mode")
+        return LLMClinicalAssessment(
+            llm_available=False,
+            error="External clinical LLM is not permitted in production mode.",
+            reasoning="LLM reasoning disabled — constitutional rules only.",
+            recommended_decision=CONDITIONAL,
+            risk_tier=RISK_MEDIUM,
+        )
+    if not external_llm_enabled:
+        logger.info("External clinical LLM disabled — using rule-only fallback")
+        return LLMClinicalAssessment(
+            llm_available=False,
+            error="External clinical LLM disabled by configuration.",
+            reasoning="LLM reasoning disabled — constitutional rules only.",
+            recommended_decision=CONDITIONAL,
+            risk_tier=RISK_MEDIUM,
+        )
+
     # Choose provider
     if os.environ.get("ANTHROPIC_API_KEY"):
         caller = _call_llm_anthropic_api
@@ -280,6 +302,7 @@ async def get_llm_assessment(action_text: str) -> LLMClinicalAssessment:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+@braintrust_traced
 async def validate_clinical_action(
     action_text: str,
     *,
@@ -342,7 +365,7 @@ async def validate_clinical_action(
             "rule_id": v.rule_id,
             "rule_text": v.rule_text,
             "severity": v.severity.value,
-            "matched_content": v.matched_content,
+            "matched_content": redact_phi_text(v.matched_content),
         }
         for v in (blocking + warnings)
     ]
@@ -411,7 +434,7 @@ async def validate_clinical_action(
         id=audit_id,
         type="clinical_validation",
         agent_id=proposer_id,
-        action=action_text[:500],
+        action="clinical_validation request",
         valid=(decision == APPROVED),
         violations=[v.rule_id for v in (blocking + warnings)],
         constitutional_hash=constitutional_hash,
@@ -422,18 +445,30 @@ async def validate_clinical_action(
             "confidence": confidence,
             "llm_available": llm.llm_available,
             "evidence_tier": llm.evidence_tier,
-            "drug_interactions": llm.drug_interactions,
-            "conditions": conditions,
+            "drug_interaction_count": len(llm.drug_interactions),
+            "condition_count": len(conditions),
         },
     )
-    audit_log.record(entry)
-
-    # Optional persistence callback (file export)
+    # Append + persist as one transaction. If persistence fails, the
+    # in-memory entry is rolled back so a retry does not produce a
+    # duplicate audit_id for the same logical validation request.
     if on_persist is not None:
         try:
-            on_persist(audit_log)
+            audit_log.record_atomic(entry, persist=on_persist)
         except OSError as exc:
-            logger.warning("Audit persistence callback failed: %s", type(exc).__name__)
+            raise RuntimeError(f"Audit persistence callback failed: {type(exc).__name__}") from exc
+    else:
+        audit_log.record(entry)
+
+    if braintrust:
+        braintrust.current_span().log(
+            metadata={
+                "decision": decision,
+                "risk_tier": final_risk,
+                "confidence": confidence,
+                "proposer_id": proposer_id,
+            }
+        )
 
     return {
         "decision": decision,
