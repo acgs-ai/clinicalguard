@@ -1,0 +1,25 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+
+# Local secrets and editor state
+.env
+.env.*
+.codex
+
+# Agent / orchestrator state (autogen, do not commit)
+.agents/skills/braintrust/
+.bt/config.json
+.bt/skills/
+.omc/
+.remember/
+.worktrees/
+
+# Benchmark output
+.benchmarks/
+
+# MkDocs build output
+site/
