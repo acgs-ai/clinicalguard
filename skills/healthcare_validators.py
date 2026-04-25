@@ -14,7 +14,7 @@ Usage::
     engine.add_validator(clinical_decision_auditor)
     engine.add_validator(adverse_event_logger)
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -101,6 +101,102 @@ _PHI_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         "License/certificate number pattern detected",
     ),
 ]
+
+_AUDIT_REPLACEMENTS: dict[str, str] = {
+    "PHI-SSN": "[REDACTED-SSN]",
+    "PHI-MRN": "[REDACTED-MRN]",
+    "PHI-DOB": "[REDACTED-DATE]",
+    "PHI-PHONE": "[REDACTED-PHONE]",
+    "PHI-EMAIL": "[REDACTED-EMAIL]",
+    "PHI-INSURANCE": "[REDACTED-INSURANCE]",
+    "PHI-IP": "[REDACTED-IP]",
+    "PHI-ACCOUNT": "[REDACTED-ACCOUNT]",
+    "PHI-DEVICE": "[REDACTED-DEVICE]",
+    "PHI-LICENSE": "[REDACTED-LICENSE]",
+}
+
+_AUDIT_REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "[REDACTED-SSN]"),
+    (
+        re.compile(
+            r"\b((?:MRN|Medical Record(?: Number)?)\s*[#:]?\s*)\d{7,10}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-MRN]",
+    ),
+    (
+        re.compile(
+            r"\b((?:DOB|date of birth|born)\s*[:\-]?\s*)"
+            r"(?:\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\d{4}-\d{2}-\d{2})\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-DATE]",
+    ),
+    (
+        re.compile(
+            r"\b((?:insurance|policy|member)\s*(?:id|number|#)\s*[:\-]?\s*)[A-Z0-9]{6,}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-INSURANCE]",
+    ),
+    (
+        re.compile(
+            r"\b((?:account|acct)\s*(?:number|#|no)\s*[:\-]?\s*)\d{8,}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-ACCOUNT]",
+    ),
+    (
+        re.compile(
+            r"\b((?:UDI|device identifier|serial number)\s*[:\-]?\s*)[A-Z0-9\-]{8,}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-DEVICE]",
+    ),
+    (
+        re.compile(
+            r"\b((?:license|certificate|DEA)\s*(?:number|#|no)\s*[:\-]?\s*)[A-Z]{2}\d{7}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-LICENSE]",
+    ),
+    (
+        re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"),
+        "[REDACTED-PHONE]",
+    ),
+    (
+        re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
+        "[REDACTED-EMAIL]",
+    ),
+    (
+        re.compile(
+            r"\b(IP\s*(?:address)?\s*[:\-]?\s*)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED-IP]",
+    ),
+]
+
+
+def redact_phi_text(text: str) -> str:
+    """Redact PHI identifiers from audit text while preserving forensic context."""
+    redacted = text
+    # Keep surrounding labels and non-PHI terms intact so audit entries remain
+    # useful for incident review without retaining raw patient identifiers.
+    for pattern, replacement in _AUDIT_REDACTION_PATTERNS:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
+
+
+def redact_phi_value(value: Any) -> Any:
+    """Recursively redact PHI-bearing strings inside nested audit values."""
+    if isinstance(value, str):
+        return redact_phi_text(value)
+    if isinstance(value, list):
+        return [redact_phi_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_phi_value(item) for key, item in value.items()}
+    return value
 
 
 def phi_detector(text: str, context: dict[str, Any]) -> list[Violation]:

@@ -11,10 +11,11 @@ Supported skills:
   validate_clinical_action   — LLM + constitutional clinical validation
   check_hipaa_compliance     — HIPAA checklist against an agent description
   query_audit_trail          — Tamper-evident audit log query
+  research_router            — Runtime life-science literature / dataset triage
 
 Security: X-API-Key header required when CLINICALGUARD_API_KEY is set.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -36,13 +37,14 @@ from acgs_lite.audit import AuditLog
 from acgs_lite.constitution import Constitution
 from acgs_lite.engine import GovernanceEngine
 
+from . import CONSTITUTIONAL_HASH, __version__
+from .skills import research_router as research_router_skill
 from .skills.audit_query import query_audit_trail
+from .skills.healthcare_validators import redact_phi_value
 from .skills.hipaa_checker import check_hipaa_compliance
 from .skills.validate_clinical import validate_clinical_action
 
 logger = logging.getLogger(__name__)
-
-CONSTITUTIONAL_HASH = "8494a847758c08dc"
 
 # Security limits
 MAX_REQUEST_BODY_BYTES = 64 * 1024  # 64 KB max request body
@@ -61,7 +63,7 @@ _AGENT_CARD: dict[str, Any] = {
         "constitutional enforcement (MACI separation of powers). "
         "Every decision is cryptographically logged in a tamper-evident audit trail."
     ),
-    "version": "1.0.0",
+    "version": __version__,
     "url": os.environ.get("CLINICALGUARD_URL", "http://localhost:8080"),
     "capabilities": ["tasks"],
     "defaultInputModes": ["text/plain", "application/json"],
@@ -112,6 +114,21 @@ _AGENT_CARD: dict[str, Any] = {
                 "query_audit_trail: recent 10",
             ],
         },
+        {
+            "id": "research_router",
+            "name": "Research Router",
+            "description": (
+                "Route a broad life-science research question to the installed runtime "
+                "for concise evidence discovery. Returns a direct answer, lane-level evidence, "
+                "caveats, and next-step suggestions."
+            ),
+            "inputModes": ["text/plain"],
+            "outputModes": ["application/json"],
+            "examples": [
+                "research_router: what is known about warfarin plus aspirin bleeding risk?",
+                "research_router: PXD024902",
+            ],
+        },
     ],
     "provider": {
         "organization": "ACGS Project",
@@ -146,6 +163,8 @@ class ClinicalGuardApp:
         constitution: Constitution,
         audit_log: AuditLog,
         audit_log_path: Path | None = None,
+        research_runtime_status: dict[str, Any] | None = None,
+        allow_no_auth: bool = False,
     ) -> None:
         self.engine = GovernanceEngine(constitution, strict=False)
         # Wire custom healthcare validators (PHI-PHONE, PHI-DOB, etc.)
@@ -154,23 +173,67 @@ class ClinicalGuardApp:
         register_all(self.engine)
         self.audit_log = audit_log
         self.audit_log_path = audit_log_path
-        self._api_key = os.environ.get("CLINICALGUARD_API_KEY", "")
+        self._api_key = os.environ.get("CLINICALGUARD_API_KEY", "").strip()
+        # Fail-closed: auth is required unless caller explicitly opts in to
+        # the no-auth path.  ``allow_no_auth=True`` is reserved for unit tests
+        # and sandboxed development; callers that enable it MUST NOT expose
+        # the resulting app to untrusted networks.
+        self._allow_no_auth = bool(allow_no_auth)
+        if not self._api_key and not self._allow_no_auth:
+            raise RuntimeError(
+                "CLINICALGUARD_API_KEY must be set. "
+                "Pass allow_no_auth=True (or set CLINICALGUARD_ALLOW_NO_AUTH=1) "
+                "for local dev/test ONLY."
+            )
+        self._audit_persistence_ok = True
+        self._audit_persistence_error: str | None = None
+        self.research_runtime_status = research_runtime_status or {
+            "available": False,
+            "summary": "Life-science runtime status unavailable.",
+            "scripts": {},
+        }
 
     @classmethod
     def create(
         cls,
         constitution_path: str | Path | None = None,
         audit_log_path: str | Path | None = None,
+        allow_no_auth: bool | None = None,
     ) -> ClinicalGuardApp:
-        """Factory: load constitution from YAML, restore audit log from file."""
+        """Factory: load constitution from YAML, restore audit log from file.
+
+        Auth is enforced by default (fail-closed).  For local dev / CI the
+        caller can either:
+
+        * set ``CLINICALGUARD_API_KEY`` to a real value, or
+        * set ``CLINICALGUARD_ALLOW_NO_AUTH=1`` / pass ``allow_no_auth=True``
+          to explicitly acknowledge the server will accept any caller.
+        """
         if constitution_path is None:
             constitution_path = Path(__file__).parent / "constitution" / "healthcare_v1.yaml"
+
+        if allow_no_auth is None:
+            allow_no_auth = os.environ.get("CLINICALGUARD_ALLOW_NO_AUTH", "").strip() == "1"
 
         constitution = Constitution.from_yaml(str(constitution_path))
         logger.info(
             "Loaded Healthcare AI Constitution: %d rules, hash=%s",
             len(constitution.rules),
             constitution.hash,
+        )
+        research_runtime_status = research_router_skill.validate_runtime_startup()
+        if research_runtime_status["retrieval_runtime"]["available"]:
+            logger.info(
+                "Life-science runtime validated: %s",
+                research_runtime_status["retrieval_runtime"]["scripts"],
+            )
+        else:
+            logger.warning(
+                "Life-science runtime unavailable: %s",
+                research_runtime_status["retrieval_runtime"]["summary"],
+            )
+        logger.info(
+            "Research local model status: %s", research_runtime_status["local_model"]["summary"]
         )
 
         audit_log = AuditLog()
@@ -185,22 +248,40 @@ class ClinicalGuardApp:
                 except (OSError, ValueError, KeyError) as exc:
                     logger.warning("Could not restore audit log: %s", exc)
 
-        return cls(constitution=constitution, audit_log=audit_log, audit_log_path=audit_log_path)
+        return cls(
+            constitution=constitution,
+            audit_log=audit_log,
+            audit_log_path=audit_log_path,
+            research_runtime_status=research_runtime_status,
+            allow_no_auth=allow_no_auth,
+        )
 
     def _persist(self, audit_log: AuditLog) -> None:
         """Persist audit log to file (called after each write)."""
         if self.audit_log_path:
             try:
                 audit_log.export_json(self.audit_log_path)
+                self._audit_persistence_ok = True
+                self._audit_persistence_error = None
             except OSError as exc:
-                logger.warning("Audit log persistence failed: %s", type(exc).__name__)
+                self._audit_persistence_ok = False
+                self._audit_persistence_error = type(exc).__name__
+                raise RuntimeError(f"Audit log persistence failed: {type(exc).__name__}") from exc
 
     def _check_auth(self, request: Request) -> bool:
-        """Return True if auth passes (or no API key configured)."""
+        """Return True if auth passes.
+
+        Fail-closed: if no API key is configured, auth is accepted ONLY when
+        the app was explicitly constructed with ``allow_no_auth=True`` (for
+        unit tests / sandboxed dev).  Otherwise the constructor would have
+        already refused to start, so reaching this branch with
+        ``_allow_no_auth=False`` and an empty key is unreachable in normal
+        flow — we still deny the request as defence-in-depth.
+        """
         import hmac
 
         if not self._api_key:
-            return True
+            return self._allow_no_auth
         return hmac.compare_digest(
             request.headers.get("X-API-Key", "").encode(),
             self._api_key.encode(),
@@ -214,11 +295,23 @@ class ClinicalGuardApp:
     async def handle_health(self, request: Request) -> JSONResponse:
         return JSONResponse(
             {
-                "status": "ok",
+                "status": "ok" if self._audit_persistence_ok else "degraded",
                 "rules": len(self.engine.constitution.rules),
                 "audit_entries": len(self.audit_log),
                 "chain_valid": self.audit_log.verify_chain(),
                 "constitutional_hash": CONSTITUTIONAL_HASH,
+                "audit_persistence_ok": self._audit_persistence_ok,
+                "audit_persistence_error": self._audit_persistence_error,
+                "research_runtime_available": self.research_runtime_status["retrieval_runtime"][
+                    "available"
+                ],
+                "research_runtime_summary": self.research_runtime_status["retrieval_runtime"][
+                    "summary"
+                ],
+                "research_model_available": self.research_runtime_status["local_model"][
+                    "available"
+                ],
+                "research_model_summary": self.research_runtime_status["local_model"]["summary"],
             }
         )
 
@@ -314,6 +407,11 @@ class ClinicalGuardApp:
         if not isinstance(parts, list):
             parts = []
         first_part = parts[0] if parts else {}
+        explicit_skill = ""
+        if isinstance(first_part, dict):
+            raw_skill = first_part.get("skill", "")
+            if isinstance(raw_skill, str):
+                explicit_skill = raw_skill.strip()
         text = first_part.get("text", "") if isinstance(first_part, dict) else ""
         if not isinstance(text, str):
             text = str(text) if text is not None else ""
@@ -342,7 +440,7 @@ class ClinicalGuardApp:
             or (ord(c) >= 32 and unicodedata.category(c) not in ("Cf", "Cc", "Cn"))
         )
 
-        skill_name, skill_input = _parse_skill(text)
+        skill_name, skill_input = _parse_skill(text, explicit_skill=explicit_skill)
 
         try:
             result_data = await self._dispatch(skill_name, skill_input)
@@ -392,19 +490,31 @@ class ClinicalGuardApp:
             audit_id: str | None = None
             limit = 20
             stripped = skill_input.strip()
-            if stripped.upper().startswith("HC-") or (
-                stripped and all(c.isalnum() or c == "-" for c in stripped.split()[0])
-            ):
-                audit_id = stripped.split()[0]
-            elif "recent" in stripped.lower():
+            if "recent" in stripped.lower():
                 parts = stripped.lower().split()
                 idx = parts.index("recent")
                 if idx + 1 < len(parts) and parts[idx + 1].isdigit():
                     limit = min(int(parts[idx + 1]), 500)
+            elif stripped.upper().startswith("HC-") or (
+                stripped and all(c.isalnum() or c == "-" for c in stripped.split()[0])
+            ):
+                audit_id = stripped.split()[0]
             return query_audit_trail(self.audit_log, audit_id=audit_id, limit=limit)
 
+        if skill_name == "research_router":
+            return await research_router_skill.research_router(
+                skill_input,
+                audit_log=self.audit_log,
+                on_persist=self._persist,
+            )
+
         # Unknown skill — return helpful error
-        available = ["validate_clinical_action", "check_hipaa_compliance", "query_audit_trail"]
+        available = [
+            "validate_clinical_action",
+            "check_hipaa_compliance",
+            "query_audit_trail",
+            "research_router",
+        ]
         return {
             "error": f"Unknown skill: {skill_name!r}",
             "available_skills": available,
@@ -427,7 +537,7 @@ class ClinicalGuardApp:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _parse_skill(text: str) -> tuple[str, str]:
+def _parse_skill(text: str, *, explicit_skill: str = "") -> tuple[str, str]:
     """Parse 'skill_name: input text' or fall back to keyword detection.
 
     Returns (skill_name, skill_input).
@@ -437,7 +547,14 @@ def _parse_skill(text: str) -> tuple[str, str]:
         "validate_clinical_action",
         "check_hipaa_compliance",
         "query_audit_trail",
+        "research_router",
     ]
+
+    if explicit_skill:
+        normalized = explicit_skill.strip().lower().replace(" ", "_")
+        if normalized in known_skills:
+            return normalized, text
+        return "unknown", text
 
     # Try explicit prefix "skill_name: ..."
     for skill in known_skills:
@@ -467,6 +584,20 @@ def _parse_skill(text: str) -> tuple[str, str]:
         return "check_hipaa_compliance", text
     if any(kw in text_lower for kw in ["audit", "query audit", "trail", "hc-2"]):
         return "query_audit_trail", text
+    if any(
+        kw in text_lower
+        for kw in [
+            "what is known about",
+            "research",
+            "pmid",
+            "pubmed",
+            "proteomics",
+            "proteomexchange",
+            "pxd",
+            "usi",
+        ]
+    ):
+        return "research_router", text
 
     # Default: try to validate as a clinical action
     return "validate_clinical_action", text
@@ -482,12 +613,12 @@ def _restore_audit_log(audit_log: AuditLog, path: Path) -> None:
             id=entry_dict["id"],
             type=entry_dict.get("type", "clinical_validation"),
             agent_id=entry_dict.get("agent_id", ""),
-            action=entry_dict.get("action", ""),
+            action=redact_phi_value(entry_dict.get("action", "")),
             valid=entry_dict.get("valid", True),
-            violations=entry_dict.get("violations", []),
+            violations=redact_phi_value(entry_dict.get("violations", [])),
             constitutional_hash=entry_dict.get("constitutional_hash", ""),
             latency_ms=entry_dict.get("latency_ms", 0.0),
-            metadata=entry_dict.get("metadata", {}),
+            metadata=redact_phi_value(entry_dict.get("metadata", {})),
             timestamp=entry_dict.get("timestamp", ""),
         )
         audit_log.record(entry)

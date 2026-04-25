@@ -10,7 +10,7 @@ Environment variables:
     CLINICALGUARD_URL          Public URL for agent card. Default: http://localhost:8080
     PI_BINARY                  Path to pi binary. Default: pi (must be in PATH).
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -20,6 +20,14 @@ import os
 from pathlib import Path
 
 from .agent import create_app
+
+try:
+    import braintrust
+
+    braintrust.init_logger(project="acgs")
+    braintrust.auto_instrument()
+except (ImportError, Exception):
+    pass
 
 logging.basicConfig(
     level=logging.INFO,

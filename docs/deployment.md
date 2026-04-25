@@ -67,7 +67,7 @@ Health endpoint returns:
   "rules": 20,
   "audit_entries": 142,
   "chain_valid": true,
-  "constitutional_hash": "608508a9bd224290"
+  "constitutional_hash": "8494a847758c08dc"
 }
 ```
 

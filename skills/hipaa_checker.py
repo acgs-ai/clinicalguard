@@ -3,12 +3,14 @@
 Wraps acgs_lite.compliance.hipaa_ai.HIPAACompliance and maps MACI roles
 to each checklist item's mitigation.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: see clinicalguard.CONSTITUTIONAL_HASH
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from clinicalguard import CONSTITUTIONAL_HASH
 
 
 def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
@@ -37,7 +39,7 @@ def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
             "items_failing": 0,
             "checklist": [],
             "summary": f"HIPAA compliance module unavailable ({type(exc).__name__}) — check server configuration",
-            "constitutional_hash": "608508a9bd224290",
+            "constitutional_hash": CONSTITUTIONAL_HASH,
         }
 
     hipaa = HIPAACompliance()
@@ -110,7 +112,7 @@ def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
         "items_warning": len(warnings),
         "checklist": checklist,
         "summary": " ".join(summary_parts),
-        "constitutional_hash": "608508a9bd224290",
+        "constitutional_hash": CONSTITUTIONAL_HASH,
     }
 
 

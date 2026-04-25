@@ -31,6 +31,13 @@ PyPI = "https://pypi.org/project/clinicalguard/"
 anthropic = ["anthropic>=0.30"]
 openai = ["openai>=1.0"]
 all = ["clinicalguard[anthropic,openai]"]
+train = [
+    "accelerate>=1.0",
+    "datasets>=3.0",
+    "peft>=0.13",
+    "trl>=0.20",
+    "unsloth>=2026.3.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -44,11 +51,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.setuptools]
-packages = ["clinicalguard", "clinicalguard.skills"]
+packages = ["clinicalguard", "clinicalguard.constitution", "clinicalguard.skills"]
 
 [tool.setuptools.package-dir]
 clinicalguard = "."
+"clinicalguard.constitution" = "constitution"
 "clinicalguard.skills" = "skills"
 
 [tool.setuptools.package-data]
-clinicalguard = ["constitution/*.yaml"]
+"clinicalguard.constitution" = ["*.yaml"]

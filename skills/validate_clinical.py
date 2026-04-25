@@ -434,7 +434,7 @@ async def validate_clinical_action(
         id=audit_id,
         type="clinical_validation",
         agent_id=proposer_id,
-        action="clinical_validation request",
+        action=redact_phi_text(action_text),
         valid=(decision == APPROVED),
         violations=[v.rule_id for v in (blocking + warnings)],
         constitutional_hash=constitutional_hash,
