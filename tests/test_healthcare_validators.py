@@ -1,6 +1,6 @@
 """Tests for healthcare-specific custom validators.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from clinicalguard.skills.healthcare_validators import (
     adverse_event_logger,
     clinical_decision_auditor,
     phi_detector,
+    redact_phi_text,
     register_all,
 )
 
@@ -90,6 +91,27 @@ class TestPHIDetector:
         for v in violations:
             assert v.severity == Severity.CRITICAL
             assert v.category == "phi_protection"
+
+
+class TestPHIRedaction:
+    """Mask identifiers in audit text without dropping clinical or forensic context."""
+
+    def test_redacts_phi_but_preserves_clinical_and_adversarial_context(self) -> None:
+        text = (
+            "Patient SSN 123-45-6789, DOB: 1990-01-15, MRN: 12345678. "
+            "Propose Aspirin after bypass governance marker review."
+        )
+
+        redacted = redact_phi_text(text)
+
+        assert "Aspirin" in redacted
+        assert "bypass governance" in redacted
+        assert "Patient SSN [REDACTED-SSN]" in redacted
+        assert "DOB: [REDACTED-DATE]" in redacted
+        assert "MRN: [REDACTED-MRN]" in redacted
+        assert "123-45-6789" not in redacted
+        assert "1990-01-15" not in redacted
+        assert "12345678" not in redacted
 
 
 # ---------------------------------------------------------------------------

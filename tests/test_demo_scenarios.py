@@ -14,7 +14,7 @@ Scenario 3 (CONDITIONAL):
 LLM is mocked in these tests to ensure deterministic results.
 Constitutional rule matching is tested without any API calls.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations

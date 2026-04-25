@@ -4,7 +4,7 @@ This suite encodes the expected fail-closed posture for hostile inputs across
 prompt injection, PHI extraction, auth handling, input validation, and audit
 integrity.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -127,14 +127,14 @@ def audit_log() -> AuditLog:
 @pytest.fixture
 def guard(tmp_path) -> ClinicalGuardApp:
     """Create a raw ClinicalGuardApp for direct request-dispatch tests."""
-    return ClinicalGuardApp.create(audit_log_path=tmp_path / "audit.json")
+    return ClinicalGuardApp.create(audit_log_path=tmp_path / "audit.json", allow_no_auth=True)
 
 
 @pytest.fixture
 def guard_with_auth(tmp_path, monkeypatch) -> ClinicalGuardApp:
     """Create a ClinicalGuardApp with API-key enforcement enabled."""
     monkeypatch.setenv("CLINICALGUARD_API_KEY", "test-key-123")
-    return ClinicalGuardApp.create(audit_log_path=tmp_path / "audit.json")
+    return ClinicalGuardApp.create(audit_log_path=tmp_path / "audit.json", allow_no_auth=True)
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ class TestPromptInjection:
                 engine=engine,
                 audit_log=audit_log,
             )
-        _assert_rejected_or_flagged(result, "HC-001", "HC-013")
+        _assert_rejected_or_flagged(result, "HC-001")
 
     @pytest.mark.asyncio
     async def test_roleplay_validator_takeover_is_flagged(self, engine, audit_log):

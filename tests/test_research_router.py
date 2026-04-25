@@ -402,6 +402,7 @@ async def test_research_router_persistence_retry_does_not_duplicate(monkeypatch)
     """A retry after a transient persist failure must not leave orphan entries
     behind, so the second attempt's audit trail is not a duplicate of the first.
     """
+
     async def _fake_runtime(script_path, payload):
         return {
             "ok": True,

@@ -2,7 +2,7 @@
 
 Tests edge cases, LLM fallback, empty input, confidence scoring.
 
-Constitutional Hash: 608508a9bd224290
+Constitutional Hash: derived from bundled healthcare_v1.yaml
 """
 
 from __future__ import annotations
@@ -90,6 +90,19 @@ class TestLLMFallback:
             )
         assert result["decision"] == CONDITIONAL  # fail-closed: never APPROVED without LLM
         assert result["llm_available"] is False
+
+    @pytest.mark.asyncio
+    async def test_external_llm_forbidden_in_production(self, engine, audit_log, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("CLINICALGUARD_ENABLE_EXTERNAL_CLINICAL_LLM", "true")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        result = await validate_clinical_action(
+            "Patient SYNTH-001 propose Lisinopril 10mg.",
+            engine=engine,
+            audit_log=audit_log,
+        )
+        assert result["llm_available"] is False
+        assert "disabled" in result["reasoning"].lower()
         assert result["audit_id"].startswith("HC-")
 
     @pytest.mark.asyncio
@@ -233,3 +246,20 @@ class TestAuditIntegrity:
             )
         assert called, "Persistence callback should have been called"
         assert called[0] >= 1
+
+    @pytest.mark.asyncio
+    async def test_persistence_callback_failure_raises(self, engine, audit_log):
+        def failing_persist(log):
+            raise OSError("disk full")
+
+        with patch(
+            "clinicalguard.skills.validate_clinical.get_llm_assessment",
+            return_value=_clean_assessment(),
+        ):
+            with pytest.raises(RuntimeError, match="Audit persistence callback failed"):
+                await validate_clinical_action(
+                    "Prescribe Atorvastatin 20mg SYNTH-003.",
+                    engine=engine,
+                    audit_log=audit_log,
+                    on_persist=failing_persist,
+                )
