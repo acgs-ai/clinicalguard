@@ -10,10 +10,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
 from acgs_lite.audit import AuditLog
 from acgs_lite.constitution import Constitution
 from acgs_lite.engine import GovernanceEngine
+
 from clinicalguard.skills.validate_clinical import (
     APPROVED,
     CONDITIONAL,

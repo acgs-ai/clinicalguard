@@ -217,7 +217,8 @@ class TestHIPAAChecklist:
         resp = client.post(
             "/",
             json=_make_a2a_body(
-                "check_hipaa_compliance: AI healthcare agent with audit logging and MACI enforcement."
+                "check_hipaa_compliance: AI healthcare agent with audit "
+                "logging and MACI enforcement."
             ),
         )
         result = resp.json()["result"]["result"]

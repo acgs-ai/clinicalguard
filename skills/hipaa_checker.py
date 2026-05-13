@@ -36,7 +36,10 @@ def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
             "items_passing": 0,
             "items_failing": 0,
             "checklist": [],
-            "summary": f"HIPAA compliance module unavailable ({type(exc).__name__}) — check server configuration",
+            "summary": (
+                f"HIPAA compliance module unavailable ({type(exc).__name__}) "
+                "— check server configuration"
+            ),
             "constitutional_hash": "608508a9bd224290",
         }
 
