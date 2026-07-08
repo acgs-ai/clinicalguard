@@ -52,3 +52,6 @@ clinicalguard = "."
 
 [tool.setuptools.package-data]
 clinicalguard = ["constitution/*.yaml"]
+
+[tool.uv.sources]
+acgs-lite = { workspace = true }
