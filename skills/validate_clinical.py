@@ -75,7 +75,7 @@ JSON schema:
 
 Rules:
 - Use only SYNTHETIC or de-identified patient identifiers (SYNTH-XXX, PATIENT-XXX).
-- A MAJOR drug interaction → risk_tier at minimum HIGH, recommended_decision REJECTED or CONDITIONAL.
+- A MAJOR drug interaction → risk_tier at least HIGH, recommended_decision REJECTED or CONDITIONAL.
 - A CRITICAL dosing deviation (e.g. 10x dose) → risk_tier CRITICAL, recommended_decision REJECTED.
 - OFF_LABEL evidence tier → risk_tier at minimum HIGH.
 - Missing step therapy → CONDITIONALLY_APPROVED with step-therapy condition.
