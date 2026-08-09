@@ -6,7 +6,8 @@ Usage:
 
 Environment variables:
     CLINICALGUARD_API_KEY      Required in production. Omit for local dev.
-    CLINICALGUARD_AUDIT_LOG    Path to persist audit log JSON. Default: /tmp/clinicalguard_audit.json
+    CLINICALGUARD_AUDIT_LOG    Path to persist audit log JSON.
+                               Default: /tmp/clinicalguard_audit.json
     CLINICALGUARD_URL          Public URL for agent card. Default: http://localhost:8080
     PI_BINARY                  Path to pi binary. Default: pi (must be in PATH).
 

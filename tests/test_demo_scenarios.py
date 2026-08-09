@@ -22,9 +22,9 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
 from acgs_lite.audit import AuditLog
 from acgs_lite.constitution import Constitution
+
 from clinicalguard.skills.validate_clinical import (
     CONDITIONAL,
     REJECTED,
@@ -81,7 +81,8 @@ def _mock_warfarin_aspirin() -> LLMClinicalAssessment:
         reasoning=(
             "Warfarin + Aspirin is a major drug interaction with significant bleeding risk. "
             "Aspirin inhibits platelet aggregation AND increases free Warfarin levels. "
-            "This combination requires rejection unless explicitly justified with close INR monitoring."
+            "This combination requires rejection unless explicitly justified with "
+            "close INR monitoring."
         ),
         recommended_decision=REJECTED,
         conditions=[],

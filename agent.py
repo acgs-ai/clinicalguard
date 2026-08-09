@@ -27,14 +27,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from acgs_lite.audit import AuditLog
+from acgs_lite.constitution import Constitution
+from acgs_lite.engine import GovernanceEngine
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-
-from acgs_lite.audit import AuditLog
-from acgs_lite.constitution import Constitution
-from acgs_lite.engine import GovernanceEngine
 
 from .skills.audit_query import query_audit_trail
 from .skills.hipaa_checker import check_hipaa_compliance
@@ -79,8 +78,14 @@ _AGENT_CARD: dict[str, Any] = {
             "inputModes": ["text/plain"],
             "outputModes": ["application/json"],
             "examples": [
-                "validate_clinical_action: Patient SYNTH-042 on Warfarin. Propose Aspirin 325mg daily.",
-                "validate_clinical_action: Prescribe Adalimumab 40mg Q2W for RA. No prior treatment documented.",
+                (
+                    "validate_clinical_action: Patient SYNTH-042 on Warfarin. "
+                    "Propose Aspirin 325mg daily."
+                ),
+                (
+                    "validate_clinical_action: Prescribe Adalimumab 40mg Q2W for RA. "
+                    "No prior treatment documented."
+                ),
             ],
         },
         {
@@ -94,7 +99,10 @@ _AGENT_CARD: dict[str, Any] = {
             "inputModes": ["text/plain"],
             "outputModes": ["application/json"],
             "examples": [
-                "check_hipaa_compliance: This agent processes synthetic patient data, maintains an audit log...",
+                (
+                    "check_hipaa_compliance: This agent processes synthetic "
+                    "patient data, maintains an audit log..."
+                ),
             ],
         },
         {
@@ -326,7 +334,10 @@ class ClinicalGuardApp:
                     "id": req_id,
                     "error": {
                         "code": -32602,
-                        "message": f"Action text too long ({len(text)} chars, max {MAX_ACTION_TEXT_CHARS})",
+                        "message": (
+                            f"Action text too long ({len(text)} chars, "
+                            f"max {MAX_ACTION_TEXT_CHARS})"
+                        ),
                     },
                 },
                 status_code=400,
