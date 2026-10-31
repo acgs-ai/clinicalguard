@@ -78,10 +78,14 @@ _AGENT_CARD: dict[str, Any] = {
             "inputModes": ["text/plain"],
             "outputModes": ["application/json"],
             "examples": [
-                "validate_clinical_action: Patient SYNTH-042 on Warfarin. "
-                "Propose Aspirin 325mg daily.",
-                "validate_clinical_action: Prescribe Adalimumab 40mg Q2W for RA. "
-                "No prior treatment documented.",
+                (
+                    "validate_clinical_action: Patient SYNTH-042 on Warfarin. "
+                    "Propose Aspirin 325mg daily."
+                ),
+                (
+                    "validate_clinical_action: Prescribe Adalimumab 40mg Q2W for RA. "
+                    "No prior treatment documented."
+                ),
             ],
         },
         {
@@ -95,8 +99,10 @@ _AGENT_CARD: dict[str, Any] = {
             "inputModes": ["text/plain"],
             "outputModes": ["application/json"],
             "examples": [
-                "check_hipaa_compliance: This agent processes synthetic patient data, "
-                "maintains an audit log...",
+                (
+                    "check_hipaa_compliance: This agent processes synthetic patient data, "
+                    "maintains an audit log..."
+                ),
             ],
         },
         {
