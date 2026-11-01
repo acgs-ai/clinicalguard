@@ -9,7 +9,7 @@ description = "Constitutional AI governance for clinical decision support — Ag
 readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
-authors = [{name = "ACGS Team", email = "hello@acgs.dev"}]
+authors = [{name = "ACGS Team", email = "hello@acgs.ai"}]
 dependencies = [
     "acgs-lite>=2.5",
     "starlette>=0.37",
