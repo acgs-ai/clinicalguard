@@ -40,17 +40,17 @@ def audit_log():
 
 
 def _clean_assessment(**kwargs) -> LLMClinicalAssessment:
-    defaults = dict(
-        evidence_tier="FDA_APPROVED",
-        drug_interactions=[],
-        step_therapy_concern=False,
-        dosing_concern=False,
-        risk_tier=RISK_LOW,
-        reasoning="Guideline-concordant. No interactions.",
-        recommended_decision=APPROVED,
-        conditions=[],
-        llm_available=True,
-    )
+    defaults = {
+        "evidence_tier": "FDA_APPROVED",
+        "drug_interactions": [],
+        "step_therapy_concern": False,
+        "dosing_concern": False,
+        "risk_tier": RISK_LOW,
+        "reasoning": "Guideline-concordant. No interactions.",
+        "recommended_decision": APPROVED,
+        "conditions": [],
+        "llm_available": True,
+    }
     defaults.update(kwargs)
     return LLMClinicalAssessment(**defaults)
 
