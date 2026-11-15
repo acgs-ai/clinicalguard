@@ -20,7 +20,24 @@ pip install clinicalguard
 > pip install "clinicalguard[anthropic]"   # or [openai]
 > ```
 
-Requires Python 3.11+.
+Requires Python 3.11+ and acgs-lite 4.x (`>=4,<5`). acgs-lite 3.0.1 is not supported: its rule engine skipped HC-003 for some MRN inputs (see the [CHANGELOG](https://github.com/acgs-ai/clinicalguard/blob/main/CHANGELOG.md)).
+
+## Docker quickstart
+
+The image installs the package from this repository (`pip install ".[anthropic]"`), runs as a non-root user, and keeps the audit log on the `/data` volume.
+
+```bash
+docker build -t clinicalguard .
+docker run --rm -p 8080:8080 -v clinicalguard_data:/data clinicalguard
+curl -s http://localhost:8080/health
+```
+
+Optional environment variables for `docker run`:
+
+- `-e ANTHROPIC_API_KEY=...` enables LLM clinical reasoning. The image includes the `anthropic` extra for this. Without a key the service starts normally and answers from the constitutional rules only (`llm_available: false`, never a bare `APPROVED`).
+- `-e CLINICALGUARD_API_KEY=...` requires `X-API-Key` on every request.
+
+The container writes the audit log to `/data/clinicalguard_audit.json` (`CLINICALGUARD_AUDIT_LOG`). A named volume works as shown. A bind mount must be writable by the container user, otherwise startup fails with a clear "not writable" error. The `/health` endpoint backs the image `HEALTHCHECK`.
 
 ## Running the Service
 
@@ -39,7 +56,7 @@ python -m clinicalguard.main
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CLINICALGUARD_API_KEY` | _(unset)_ | When set, all requests require `X-API-Key: <key>` header |
-| `CLINICALGUARD_AUDIT_LOG` | `/tmp/clinicalguard_audit.json` | Path for persisting the audit log |
+| `CLINICALGUARD_AUDIT_LOG` | `$XDG_STATE_HOME/clinicalguard/clinicalguard_audit.json` (`~/.local/state/...` if unset); `/data/clinicalguard_audit.json` in the Docker image | Path for persisting the audit log (made absolute). The service creates a missing directory (mode 0700) and log file (mode 0600) at startup, and refuses to start if this path cannot be written. There is no fallback to `/tmp` |
 | `CLINICALGUARD_URL` | `http://localhost:8080` | Public URL reported in the agent card |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | _(unset)_ | LLM credentials for clinical reasoning skill |
 
@@ -67,7 +84,13 @@ curl -s http://localhost:8080/ \
   }'
 ```
 
-Response fields: `decision` (APPROVED / CONDITIONALLY_APPROVED / REJECTED), `risk_tier` (LOW / MEDIUM / HIGH / CRITICAL), `reasoning`, `drug_interactions`, `conditions`, `audit_id`.
+Example response without an LLM provider (rule-only; the complete response captured from a clean install of the 1.1.0 wheel; `audit_id` and `timestamp` vary):
+
+```json
+{"jsonrpc":"2.0","id":"1","result":{"id":"task-001","status":"completed","result":{"decision":"CONDITIONALLY_APPROVED","confidence":0.55,"risk_tier":"MEDIUM","reasoning":"LLM reasoning unavailable — constitutional rules only.","llm_available":false,"evidence_tier":"UNKNOWN","drug_interactions":[],"violations":[],"conditions":[],"audit_id":"HC-20261115-47B28EAFF3","constitutional_hash":"8494a847758c08dc","maci_role":"validator","timestamp":"2026-11-15T21:56:47.788352+00:00","appeal_path":"Contact your governance administrator with audit_id=HC-20261115-47B28EAFF3"}}}
+```
+
+Response fields: `decision` (APPROVED / CONDITIONALLY_APPROVED / REJECTED), `risk_tier` (LOW / MEDIUM / HIGH / CRITICAL), `reasoning`, `drug_interactions`, `conditions`, `audit_id`, plus `llm_available`, `violations`, `constitutional_hash`, `maci_role`, `timestamp` and `appeal_path`.
 
 ### Check HIPAA compliance
 
@@ -93,6 +116,8 @@ Response fields: `compliant` (bool), `items_checked`, `items_passing`, `items_fa
 
 ### Query audit trail
 
+Pass the `audit_id` returned by a validation call. With no input (`query_audit_trail:`) the log is listed instead.
+
 ```bash
 curl -s http://localhost:8080/ \
   -H "Content-Type: application/json" \
@@ -104,7 +129,7 @@ curl -s http://localhost:8080/ \
       "id": "task-003",
       "message": {
         "role": "user",
-        "parts": [{"type": "text", "text": "query_audit_trail: last 5"}]
+        "parts": [{"type": "text", "text": "query_audit_trail: HC-20261115-D854D910B3"}]
       }
     }
   }'
@@ -144,7 +169,7 @@ Skill name can also be provided in the `skill` field of the first message part i
 
 ## Runtime dependencies
 
-- `acgs-lite>=2.5`
+- `acgs-lite>=4,<5`
 - `starlette>=0.37`
 - `uvicorn[standard]>=0.29`
 - `pyyaml>=6.0`

@@ -19,9 +19,11 @@ Constitutional Hash: 608508a9bd224290
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
+import stat
 import unicodedata
 import uuid
 from pathlib import Path
@@ -35,6 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from . import __version__
 from .skills.audit_query import query_audit_trail
 from .skills.hipaa_checker import check_hipaa_compliance
 from .skills.validate_clinical import validate_clinical_action
@@ -46,6 +49,69 @@ CONSTITUTIONAL_HASH = "8494a847758c08dc"
 # Security limits
 MAX_REQUEST_BODY_BYTES = 64 * 1024  # 64 KB max request body
 MAX_ACTION_TEXT_CHARS = 10_000  # 10K chars max clinical action text
+
+# Audit log location
+AUDIT_LOG_ENV = "CLINICALGUARD_AUDIT_LOG"
+DEFAULT_AUDIT_LOG_NAME = "clinicalguard_audit.json"
+
+
+def resolve_audit_log_path(environ: dict[str, str] | None = None) -> Path:
+    """Return the audit log path after proving that this exact path can be written.
+
+    Uses ``CLINICALGUARD_AUDIT_LOG`` when set (made absolute against the current
+    directory; symlinks are not resolved). Otherwise the default is
+    ``$XDG_STATE_HOME/clinicalguard/clinicalguard_audit.json`` (falling back to
+    ``~/.local/state``).
+
+    Startup checks, in order:
+
+    * the parent directory is created if missing (mode 0o700; an existing
+      directory is never chmod-ed);
+    * a directory at the path is rejected;
+    * an existing path (symlinks followed) must be a regular file that opens for
+      update; devices such as ``/dev/null`` and FIFOs are rejected, and the file is
+      not truncated or modified;
+    * otherwise the log file is created with mode 0o600 and an empty entry list.
+
+    Any failure raises ``RuntimeError`` so a misconfigured deployment stops at
+    startup instead of answering requests it cannot write an audit entry for.
+    """
+    env = os.environ if environ is None else environ
+    configured = (env.get(AUDIT_LOG_ENV) or "").strip()  # blank means unset
+    try:
+        if configured:
+            path = Path(os.path.abspath(Path(configured).expanduser()))
+        else:
+            state_home = env.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+            default = Path(state_home) / "clinicalguard" / DEFAULT_AUDIT_LOG_NAME
+            path = Path(os.path.abspath(default))
+    except RuntimeError as exc:  # no home directory to expand "~" or the default
+        raise RuntimeError(
+            f"Cannot determine a home directory for the audit log path. "
+            f"Set {AUDIT_LOG_ENV} to an absolute, writable file path."
+        ) from exc
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if path.is_dir():
+            raise IsADirectoryError(f"{path} is a directory")
+        if path.exists() or path.is_symlink():
+            # Check the file type BEFORE opening: opening a FIFO or device can block
+            # or succeed on something that discards writes (e.g. /dev/null).
+            if not stat.S_ISREG(os.stat(path).st_mode):  # follows symlinks
+                raise OSError(errno.EINVAL, "not a regular file")
+            with open(path, "r+b"):
+                pass
+        else:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write('{"entries": []}')
+    except OSError as exc:
+        raise RuntimeError(
+            f"Audit log path {str(path)!r} is not writable ({type(exc).__name__}: "
+            f"{exc.strerror or exc}). Set {AUDIT_LOG_ENV} to a writable file path."
+        ) from exc
+    return path
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Agent card (Prompt Opinion Marketplace registration)
@@ -60,7 +126,7 @@ _AGENT_CARD: dict[str, Any] = {
         "constitutional enforcement (MACI separation of powers). "
         "Every decision is cryptographically logged in a tamper-evident audit trail."
     ),
-    "version": "1.0.0",
+    "version": __version__,
     "url": os.environ.get("CLINICALGUARD_URL", "http://localhost:8080"),
     "capabilities": ["tasks"],
     "defaultInputModes": ["text/plain", "application/json"],
