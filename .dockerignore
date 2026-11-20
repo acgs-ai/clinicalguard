@@ -1,0 +1,10 @@
+# Allow-list: the build context contains only what `pip install .` needs.
+# Everything else (secrets, .env files, audit logs, caches, tests, docs) is excluded.
+*
+!pyproject.toml
+!README.md
+!__init__.py
+!agent.py
+!main.py
+!skills/*.py
+!constitution/*.yaml

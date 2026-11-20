@@ -7,7 +7,8 @@ Usage:
 Environment variables:
     CLINICALGUARD_API_KEY      Required in production. Omit for local dev.
     CLINICALGUARD_AUDIT_LOG    Path to persist audit log JSON.
-                               Default: /tmp/clinicalguard_audit.json
+                               Default: $XDG_STATE_HOME/clinicalguard/clinicalguard_audit.json
+                               (~/.local/state/... if unset). Startup fails if unwritable.
     CLINICALGUARD_URL          Public URL for agent card. Default: http://localhost:8080
     PI_BINARY                  Path to pi binary. Default: pi (must be in PATH).
 
@@ -18,16 +19,15 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
-from .agent import create_app
+from .agent import create_app, resolve_audit_log_path
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-_audit_log_path = Path(os.environ.get("CLINICALGUARD_AUDIT_LOG", "/tmp/clinicalguard_audit.json"))
+_audit_log_path = resolve_audit_log_path()
 
 app = create_app(audit_log_path=_audit_log_path)
 
