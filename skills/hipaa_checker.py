@@ -10,13 +10,20 @@ from __future__ import annotations
 
 from typing import Any
 
+CONSTITUTIONAL_HASH = "8494a847758c08dc"
 
-def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
+
+def check_hipaa_compliance(
+    agent_description: str,
+    *,
+    constitutional_hash: str = CONSTITUTIONAL_HASH,
+) -> dict[str, Any]:
     """Run HIPAA compliance checklist against an agent system description.
 
     Args:
         agent_description: Plain-text description of the AI agent's behaviour,
                            data handling, and system architecture.
+        constitutional_hash: Active constitution hash to include in the report.
 
     Returns dict with:
         compliant:        bool (True if no blocking failures)
@@ -38,7 +45,7 @@ def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
             "checklist": [],
             "summary": f"HIPAA compliance module unavailable ({type(exc).__name__}) "
             "— check server configuration",
-            "constitutional_hash": "608508a9bd224290",
+            "constitutional_hash": constitutional_hash,
         }
 
     hipaa = HIPAACompliance()
@@ -111,7 +118,7 @@ def check_hipaa_compliance(agent_description: str) -> dict[str, Any]:
         "items_warning": len(warnings),
         "checklist": checklist,
         "summary": " ".join(summary_parts),
-        "constitutional_hash": "608508a9bd224290",
+        "constitutional_hash": constitutional_hash,
     }
 
 

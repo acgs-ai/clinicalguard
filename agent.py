@@ -254,10 +254,17 @@ class ClinicalGuardApp:
             audit_log_path = Path(audit_log_path)
             if audit_log_path.exists():
                 try:
-                    _restore_audit_log(audit_log, audit_log_path)
-                    logger.info("Restored %d audit entries from %s", len(audit_log), audit_log_path)
-                except (OSError, ValueError, KeyError) as exc:
-                    logger.warning("Could not restore audit log: %s", exc)
+                    if audit_log_path.stat().st_size > 0:
+                        _restore_audit_log(audit_log, audit_log_path)
+                        logger.info(
+                            "Restored %d audit entries from %s", len(audit_log), audit_log_path
+                        )
+                except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"Failed to restore non-empty audit log {str(audit_log_path)!r} "
+                        f"({type(exc).__name__}: {exc}). Refusing to start to prevent "
+                        f"overwriting forensic audit history."
+                    ) from exc
 
         return cls(constitution=constitution, audit_log=audit_log, audit_log_path=audit_log_path)
 
@@ -292,7 +299,7 @@ class ClinicalGuardApp:
                 "rules": len(self.engine.constitution.rules),
                 "audit_entries": len(self.audit_log),
                 "chain_valid": self.audit_log.verify_chain(),
-                "constitutional_hash": CONSTITUTIONAL_HASH,
+                "constitutional_hash": self.engine.constitution.hash,
             }
         )
 
@@ -460,22 +467,33 @@ class ClinicalGuardApp:
             )
 
         if skill_name == "check_hipaa_compliance":
-            return check_hipaa_compliance(skill_input)
+            return check_hipaa_compliance(
+                skill_input,
+                constitutional_hash=self.engine.constitution.hash,
+            )
 
         if skill_name == "query_audit_trail":
-            # Input can be an audit_id ("HC-20260401-XXXXXX") or "recent N"
+            # Input can be an audit_id ("HC-20260401-XXXXXX"), "recent [N]", or "last [N]"
             audit_id: str | None = None
             limit = 20
             stripped = skill_input.strip()
-            if stripped.upper().startswith("HC-") or (
-                stripped and all(c.isalnum() or c == "-" for c in stripped.split()[0])
-            ):
-                audit_id = stripped.split()[0]
-            elif "recent" in stripped.lower():
-                parts = stripped.lower().split()
-                idx = parts.index("recent")
-                if idx + 1 < len(parts) and parts[idx + 1].isdigit():
-                    limit = min(int(parts[idx + 1]), 500)
+            if stripped:
+                tokens = stripped.split()
+                lower_tokens = [t.lower() for t in tokens]
+                first = tokens[0]
+                if first.upper().startswith("HC-"):
+                    audit_id = first
+                else:
+                    matched_kw = next(
+                        (kw for kw in ("recent", "last") if kw in lower_tokens),
+                        None,
+                    )
+                    if matched_kw is not None:
+                        idx = lower_tokens.index(matched_kw)
+                        if idx + 1 < len(lower_tokens) and lower_tokens[idx + 1].isdigit():
+                            limit = max(1, min(int(lower_tokens[idx + 1]), 500))
+                    elif all(c.isalnum() or c in "-_" for c in first):
+                        audit_id = first
             return query_audit_trail(self.audit_log, audit_id=audit_id, limit=limit)
 
         # Unknown skill — return helpful error
@@ -552,7 +570,14 @@ def _restore_audit_log(audit_log: AuditLog, path: Path) -> None:
     from acgs_lite.audit import AuditEntry
 
     data = json.loads(path.read_text())
-    for entry_dict in data.get("entries", []):
+    if not isinstance(data, dict):
+        raise TypeError("Audit log JSON root must be an object")
+    raw_entries = data.get("entries", [])
+    if not isinstance(raw_entries, list):
+        raise TypeError("Audit log 'entries' field must be a list")
+    for entry_dict in raw_entries:
+        if not isinstance(entry_dict, dict):
+            raise TypeError("Each audit log entry must be an object")
         entry = AuditEntry(
             id=entry_dict["id"],
             type=entry_dict.get("type", "clinical_validation"),

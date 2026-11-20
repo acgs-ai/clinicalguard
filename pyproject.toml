@@ -52,3 +52,9 @@ clinicalguard = "."
 
 [tool.setuptools.package-data]
 clinicalguard = ["constitution/*.yaml"]
+
+[tool.ruff.lint]
+ignore = ["N999"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["clinicalguard"]

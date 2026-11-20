@@ -49,7 +49,7 @@ def query_audit_trail(
         entries = [matches[0].to_dict()]
         const_hash = matches[0].constitutional_hash
     else:
-        recent = audit_log.entries[-limit:] if audit_log.entries else []
+        recent = audit_log.entries[-limit:] if (audit_log.entries and limit > 0) else []
         entries = [e.to_dict() for e in recent]
         const_hash = recent[-1].constitutional_hash if recent else ""
 
