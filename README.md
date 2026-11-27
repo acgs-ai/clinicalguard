@@ -35,15 +35,19 @@ curl -s http://localhost:8080/health
 Optional environment variables for `docker run`:
 
 - `-e ANTHROPIC_API_KEY=...` enables LLM clinical reasoning. The image includes the `anthropic` extra for this. Without a key the service starts normally and answers from the constitutional rules only (`llm_available: false`, never a bare `APPROVED`).
-- `-e CLINICALGUARD_API_KEY=...` requires `X-API-Key` on every request.
+- `-e CLINICALGUARD_API_KEY=...` sets the key callers must send as `X-API-Key`. **Without a key, task requests (`POST /`) are refused with 401**; `/health` and the agent card stay open. For local experiments only, `-e CLINICALGUARD_ALLOW_UNAUTHENTICATED=1` accepts task requests with no key.
 
 The container writes the audit log to `/data/clinicalguard_audit.json` (`CLINICALGUARD_AUDIT_LOG`). A named volume works as shown. A bind mount must be writable by the container user, otherwise startup fails with a clear "not writable" error. The `/health` endpoint backs the image `HEALTHCHECK`.
 
 ## Running the Service
 
 ```bash
-uvicorn clinicalguard.main:app --host 0.0.0.0 --port 8080
+CLINICALGUARD_API_KEY=your-secret-key uvicorn clinicalguard.main:app --host 0.0.0.0 --port 8080
 ```
+
+Task requests must then send `-H "X-API-Key: your-secret-key"`. The curl examples below omit the header
+for brevity; they work as written only when the service was started for local development with
+`CLINICALGUARD_ALLOW_UNAUTHENTICATED=1` instead of a key.
 
 Or with the module entry point:
 
@@ -55,7 +59,9 @@ python -m clinicalguard.main
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CLINICALGUARD_API_KEY` | _(unset)_ | When set, all requests require `X-API-Key: <key>` header |
+| `CLINICALGUARD_API_KEY` | _(unset)_ | Key that task requests must send as `X-API-Key: <key>`. When unset, task requests get 401 unless `CLINICALGUARD_ALLOW_UNAUTHENTICATED` is set. A whitespace-only value always gets 401 |
+| `CLINICALGUARD_ALLOW_UNAUTHENTICATED` | _(unset)_ | `1`, `true` or `yes` accepts task requests with no API key. Local development only. Ignored when `CLINICALGUARD_API_KEY` is set |
+| `HOST` | `127.0.0.1` | Bind address, read only by `python -m clinicalguard.main` |
 | `CLINICALGUARD_AUDIT_LOG` | `$XDG_STATE_HOME/clinicalguard/clinicalguard_audit.json` (`~/.local/state/...` if unset); `/data/clinicalguard_audit.json` in the Docker image | Path for persisting the audit log (made absolute). The service creates a missing directory (mode 0700) and log file (mode 0600) at startup, and refuses to start if this path cannot be written. There is no fallback to `/tmp` |
 | `CLINICALGUARD_URL` | `http://localhost:8080` | Public URL reported in the agent card |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | _(unset)_ | LLM credentials for clinical reasoning skill |
@@ -112,7 +118,7 @@ curl -s http://localhost:8080/ \
   }'
 ```
 
-Response fields: `compliant` (bool), `items_checked`, `items_passing`, `items_failing`, `checklist` (list with status + MACI-mapped mitigations), `constitutional_hash`.
+Response fields: `compliant` (bool; true only when nothing fails and nothing is unresolved), `items_checked`, `items_passing`, `items_failing`, `items_warning`, `items_unresolved` (pending or unrecognised status), `checklist` (list with status + MACI-mapped mitigations), `constitutional_hash`.
 
 ### Query audit trail
 
@@ -145,7 +151,7 @@ Skill name can also be provided in the `skill` field of the first message part i
 - **Healthcare AI Constitution** — bundled 20-rule `constitution/healthcare_v1.yaml`; covers medication safety, PII/PHI, MACI enforcement, EHR access controls
 - **PHI detection** — `phi_detector` custom validator catches 10 of 18 HIPAA Safe Harbor identifiers (SSN, MRN, DOB, phone, email, insurance ID, IP, account #, device/UDI, license #)
 - **Clinical decision audit** — `clinical_decision_auditor` custom validator logs every clinical decision as a governance event
-- **Security** — `X-API-Key` auth (when `CLINICALGUARD_API_KEY` is set), 64 KB request body limit, 10 K char text limit, input Unicode normalisation
+- **Security** — `X-API-Key` auth on task requests (refused with 401 when no key is configured, unless explicitly opted out), text matching a PHI rule is never sent to the LLM, 64 KB request body limit, 10 K char text limit, input Unicode normalisation
 - **A2A agent card** — `GET /.well-known/agent.json` returns the agent card for discovery
 
 ## Skill Reference

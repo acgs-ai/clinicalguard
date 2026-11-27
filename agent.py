@@ -12,7 +12,8 @@ Supported skills:
   check_hipaa_compliance     — HIPAA checklist against an agent description
   query_audit_trail          — Tamper-evident audit log query
 
-Security: X-API-Key header required when CLINICALGUARD_API_KEY is set.
+Security: task requests need X-API-Key matching CLINICALGUARD_API_KEY. With no key
+configured they are refused, unless CLINICALGUARD_ALLOW_UNAUTHENTICATED is set.
 
 Constitutional Hash: 608508a9bd224290
 """
@@ -43,6 +44,8 @@ from .skills.hipaa_checker import check_hipaa_compliance
 from .skills.validate_clinical import validate_clinical_action
 
 logger = logging.getLogger(__name__)
+
+_TRUTHY = frozenset({"1", "true", "yes"})
 
 CONSTITUTIONAL_HASH = "8494a847758c08dc"
 
@@ -228,7 +231,33 @@ class ClinicalGuardApp:
         register_all(self.engine)
         self.audit_log = audit_log
         self.audit_log_path = audit_log_path
-        self._api_key = os.environ.get("CLINICALGUARD_API_KEY", "")
+        # A whitespace-only key is not a key. It is also not "no key": the operator
+        # meant to set one, so the unauthenticated opt-out does not apply to it.
+        raw_api_key = os.environ.get("CLINICALGUARD_API_KEY", "")
+        self._api_key = raw_api_key.strip()
+        self._api_key_blank = bool(raw_api_key) and not self._api_key
+        if self._api_key_blank:
+            logger.error(
+                "CLINICALGUARD_API_KEY is set but contains only whitespace: "
+                "all task requests are rejected until a real key is configured."
+            )
+        self._allow_unauthenticated = (
+            os.environ.get("CLINICALGUARD_ALLOW_UNAUTHENTICATED", "").strip().lower()
+            in _TRUTHY
+        )
+        if not self._api_key:
+            if self._allow_unauthenticated:
+                logger.warning(
+                    "CLINICALGUARD_ALLOW_UNAUTHENTICATED is set and no CLINICALGUARD_API_KEY "
+                    "is configured: task requests are accepted without authentication. "
+                    "Local development only."
+                )
+            else:
+                logger.warning(
+                    "No CLINICALGUARD_API_KEY configured: task requests will be rejected "
+                    "with 401. Set CLINICALGUARD_API_KEY, or "
+                    "CLINICALGUARD_ALLOW_UNAUTHENTICATED=1 for local development."
+                )
 
     @classmethod
     def create(
@@ -277,11 +306,16 @@ class ClinicalGuardApp:
                 logger.warning("Audit log persistence failed: %s", type(exc).__name__)
 
     def _check_auth(self, request: Request) -> bool:
-        """Return True if auth passes (or no API key configured)."""
+        """Return True if auth passes.
+
+        Fails closed: with no API key configured every task request is refused unless
+        the operator explicitly opted out with CLINICALGUARD_ALLOW_UNAUTHENTICATED.
+        A configured key is always enforced, whatever the opt-out says.
+        """
         import hmac
 
         if not self._api_key:
-            return True
+            return self._allow_unauthenticated and not self._api_key_blank
         return hmac.compare_digest(
             request.headers.get("X-API-Key", "").encode(),
             self._api_key.encode(),

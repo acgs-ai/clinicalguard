@@ -10,6 +10,9 @@ uvicorn clinicalguard.main:app --host 0.0.0.0 --port 8080
 
 Health check: `curl http://localhost:8080/health`
 
+Task requests need `CLINICALGUARD_API_KEY` set and sent as `X-API-Key`. For local
+experiments without a key, start with `CLINICALGUARD_ALLOW_UNAUTHENTICATED=1`.
+
 The audit log defaults to `~/.local/state/clinicalguard/clinicalguard_audit.json`
 (`$XDG_STATE_HOME` is honoured). Set `CLINICALGUARD_AUDIT_LOG` to change it. The
 service refuses to start if that path cannot be written.
@@ -39,7 +42,9 @@ This repository ships no `fly.toml`. Create one with `fly launch` and mount a vo
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
 | `ANTHROPIC_API_KEY` | For LLM layer | — | Claude API key for clinical reasoning |
-| `CLINICALGUARD_API_KEY` | Recommended | — | API key for request authentication |
+| `CLINICALGUARD_API_KEY` | Yes | — | API key for request authentication. Without it task requests get 401 |
+| `CLINICALGUARD_ALLOW_UNAUTHENTICATED` | No | — | `1` accepts task requests with no API key. Local development only; ignored when a key is set |
+| `HOST` | No | `127.0.0.1` | Bind address, read only by `python -m clinicalguard.main` |
 | `CLINICALGUARD_AUDIT_LOG` | No | `/data/clinicalguard_audit.json` in Docker; `~/.local/state/clinicalguard/clinicalguard_audit.json` locally | Audit log file path (startup fails if not writable) |
 | `CLINICALGUARD_MODEL` | No | `claude-haiku-4-5` | LLM model for clinical reasoning |
 | `CLINICALGUARD_URL` | No | — | Public URL for agent card registration |
@@ -52,7 +57,8 @@ This repository ships no `fly.toml`. Create one with `fly launch` and mount a vo
 - **Input limits**: 64KB request body, 10K char action text
 - **Unicode normalization**: NFKC + zero-width/bidi stripping
 - **Error sanitization**: no exception details leaked to clients
-- **API key auth**: constant-time comparison when `CLINICALGUARD_API_KEY` is set
+- **API key auth**: constant-time comparison against `CLINICALGUARD_API_KEY`. Fails closed: with no key configured, task requests are refused
+- **Detected PHI is not sent to the LLM**: the deterministic rules run before the LLM; text matching a PHI/privacy rule is rejected without being sent to the model. Detection is pattern-based, so PHI the patterns miss (names, unusual formats) is not covered. Rejected text is still recorded in the audit log
 
 ## Monitoring
 

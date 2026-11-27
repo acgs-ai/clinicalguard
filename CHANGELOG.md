@@ -2,6 +2,32 @@
 
 All notable changes to ClinicalGuard are documented here.
 
+## [Unreleased]
+
+### Security
+
+- **Authentication fails closed.** With no `CLINICALGUARD_API_KEY` (or a whitespace-only one), task requests
+  (`POST /`) are now refused with 401. Previously they were accepted. `/health` and the agent card stay open.
+  `CLINICALGUARD_ALLOW_UNAUTHENTICATED=1` restores the old behaviour for local development and logs a
+  warning at startup; it is ignored when a key is set, and it does not apply to a whitespace-only key, which
+  is always refused. **Deployments without a key must set one.**
+- **`python -m clinicalguard.main` binds `127.0.0.1`** instead of `0.0.0.0`. Set `HOST` to change it. The
+  Docker image is unchanged (it starts `uvicorn --host 0.0.0.0`).
+- **PHI is checked before the LLM is called.** `validate_clinical_action` now runs the constitutional rules
+  first. Text that matches a privacy rule (HC-003 or a `PHI-*` validator) is not sent to the LLM provider;
+  the response is rule-only with `llm_available: false`. Previously the text was sent to the model before
+  the rules ran. The same applies when a custom validator fails. The decision for text with detected
+  PHI is unchanged (REJECTED). A failed validator now also gives REJECTED; before, it could give
+  CONDITIONAL when the LLM approved. In both cases the reported `confidence` is lower because no LLM
+  assessment is included. Detection is pattern-based: PHI the patterns do not match is not covered.
+
+### Fixed
+
+- **`check_hipaa_compliance` no longer reports `compliant: true` for unassessed checklists.** Items with
+  status `pending`, a missing status or an unrecognised status were counted as neither passing nor failing,
+  so a checklist with nothing assessed passed. They are now counted in the new `items_unresolved` field and
+  make the result non-compliant, with an `INCOMPLETE` summary. An empty checklist is also non-compliant.
+
 ## [1.1.0] - 2026-11-15
 
 ### Changed
