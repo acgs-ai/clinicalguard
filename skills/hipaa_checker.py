@@ -12,6 +12,10 @@ from typing import Any
 
 CONSTITUTIONAL_HASH = "8494a847758c08dc"
 
+_PASSING = frozenset({"compliant", "na", "not_applicable"})
+_FAILING = frozenset({"non_compliant", "fail", "unknown"})
+_WARNING = frozenset({"warning"})
+
 
 def check_hipaa_compliance(
     agent_description: str,
@@ -26,10 +30,12 @@ def check_hipaa_compliance(
         constitutional_hash: Active constitution hash to include in the report.
 
     Returns dict with:
-        compliant:        bool (True if no blocking failures)
+        compliant:        bool (True only when the checklist is non-empty, nothing fails
+                          and nothing is left unresolved)
         items_checked:    int
         items_passing:    int
         items_failing:    int
+        items_unresolved: int — pending, missing or unrecognised status
         checklist:        list[dict]  — each item with id, status, notes
         summary:          str
         constitutional_hash: str
@@ -42,6 +48,8 @@ def check_hipaa_compliance(
             "items_checked": 0,
             "items_passing": 0,
             "items_failing": 0,
+            "items_warning": 0,
+            "items_unresolved": 0,
             "checklist": [],
             "summary": f"HIPAA compliance module unavailable ({type(exc).__name__}) "
             "— check server configuration",
@@ -79,9 +87,12 @@ def check_hipaa_compliance(
     #                              blocking, legal_citation, updated_at
     items = assessment.items  # list[dict]
 
-    passing = [i for i in items if i.get("status") in ("compliant", "na", "not_applicable")]
-    failing = [i for i in items if i.get("status") in ("non_compliant", "fail", "unknown")]
-    warnings = [i for i in items if i.get("status") == "warning"]
+    passing = [i for i in items if i.get("status") in _PASSING]
+    failing = [i for i in items if i.get("status") in _FAILING]
+    warnings = [i for i in items if i.get("status") in _WARNING]
+    # Fail closed: "pending", a missing status, or any status this code does not
+    # know is unresolved, and an unresolved item is never evidence of compliance.
+    unresolved = [i for i in items if i.get("status") not in _PASSING | _FAILING | _WARNING]
 
     checklist = []
     for item in items:
@@ -95,7 +106,7 @@ def check_hipaa_compliance(
             }
         )
 
-    compliant = len(failing) == 0
+    compliant = bool(items) and not failing and not unresolved
     summary_parts = [
         f"{len(passing)}/{len(items)} items passing.",
     ]
@@ -105,10 +116,17 @@ def check_hipaa_compliance(
         )
     if warnings:
         summary_parts.append(f"{len(warnings)} warnings.")
+    if unresolved:
+        summary_parts.append(f"{len(unresolved)} unresolved (pending or partial).")
     if compliant:
         summary_parts.append("HIPAA compliance assessment: PASS.")
-    else:
+    elif failing:
         summary_parts.append("HIPAA compliance assessment: FAIL — address failing items.")
+    else:
+        summary_parts.append(
+            "HIPAA compliance assessment: INCOMPLETE — unresolved items are not evidence "
+            "of compliance."
+        )
 
     return {
         "compliant": compliant,
@@ -116,6 +134,7 @@ def check_hipaa_compliance(
         "items_passing": len(passing),
         "items_failing": len(failing),
         "items_warning": len(warnings),
+        "items_unresolved": len(unresolved),
         "checklist": checklist,
         "summary": " ".join(summary_parts),
         "constitutional_hash": constitutional_hash,

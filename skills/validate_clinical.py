@@ -1,10 +1,12 @@
 """ClinicalGuard: validate_clinical_action skill.
 
 Two-layer architecture:
-  1. LLM clinical reasoning  -- interprets free-text proposals, assesses
-                                 evidence tier, drug interactions, step therapy.
-  2. GovernanceEngine check  -- deterministic constitutional rule enforcement
+  1. GovernanceEngine check  -- deterministic constitutional rule enforcement
                                  (MACI, keyword/pattern matching, audit trail).
+                                 Runs first; text that matches a privacy rule is
+                                 not passed to layer 2.
+  2. LLM clinical reasoning  -- interprets free-text proposals, assesses
+                                 evidence tier, drug interactions, step therapy.
 
 The LLM layer handles what rule-based software cannot (novel clinical scenarios,
 semantic reasoning). The GovernanceEngine handles what LLMs should not be trusted
@@ -16,6 +18,7 @@ Constitutional Hash: 608508a9bd224290
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -216,6 +219,25 @@ def _pi_available() -> bool:
     return bool(os.environ.get("PI_BINARY") or shutil.which("pi"))
 
 
+_WITHHOLD_CATEGORIES = frozenset({"privacy", "phi_protection", "validator-error"})
+
+
+def _must_withhold_from_llm(violation: Any) -> bool:
+    """True when a violation means the text must not be sent to the LLM.
+
+    Covers HC-003 (category ``privacy``), the ``PHI-*`` validator findings, and a
+    crashed custom validator (``CUSTOM-ERROR`` / ``validator-error``): if a validator
+    failed, the PHI check may not have run, so the text is treated as unchecked.
+    """
+    category = str(getattr(violation, "category", "") or "").lower()
+    rule_id = str(getattr(violation, "rule_id", "") or "").upper()
+    return (
+        category in _WITHHOLD_CATEGORIES
+        or rule_id.startswith("PHI-")
+        or rule_id == "CUSTOM-ERROR"
+    )
+
+
 async def get_llm_assessment(action_text: str) -> LLMClinicalAssessment:
     """Get LLM clinical assessment.
 
@@ -328,13 +350,30 @@ async def validate_clinical_action(
             "llm_available": False,
         }
 
-    # Step 1: LLM clinical reasoning (async, non-blocking, with timeout fallback)
-    llm = await get_llm_assessment(action_text)
-
-    # Step 2: GovernanceEngine constitutional check (deterministic)
+    # Step 1: GovernanceEngine constitutional check (deterministic). It runs first so
+    # that text the PHI rules flag never leaves this process.
     gov_result = engine.validate(action_text, agent_id=proposer_id)
     blocking = gov_result.blocking_violations
     warnings = gov_result.warnings
+
+    # Step 2: LLM clinical reasoning (async, with timeout fallback), withheld when any
+    # privacy rule matched or a validator failed, whatever the severity. All
+    # violations are inspected, not only the blocking ones.
+    all_found = list(gov_result.violations) + list(warnings)
+    phi_withheld = any(_must_withhold_from_llm(v) for v in all_found)
+    if phi_withheld:
+        llm = LLMClinicalAssessment(
+            llm_available=False,
+            error="LLM withheld: input matched a PHI/privacy rule or a validator failed.",
+            reasoning=(
+                "LLM reasoning withheld — the input matched a PHI/privacy rule (or a "
+                "validator failed) and was not sent to the model. Constitutional rules only."
+            ),
+            recommended_decision=REJECTED,
+            risk_tier=RISK_CRITICAL,
+        )
+    else:
+        llm = await get_llm_assessment(action_text)
 
     # Step 3: Combine LLM + constitutional results → final decision
     all_violations = [
@@ -411,7 +450,7 @@ async def validate_clinical_action(
         id=audit_id,
         type="clinical_validation",
         agent_id=proposer_id,
-        action=action_text[:500],
+        action=_audit_action_summary(action_text, phi_withheld=phi_withheld),
         valid=(decision == APPROVED),
         violations=[v.rule_id for v in (blocking + warnings)],
         constitutional_hash=constitutional_hash,
@@ -424,6 +463,7 @@ async def validate_clinical_action(
             "evidence_tier": llm.evidence_tier,
             "drug_interactions": llm.drug_interactions,
             "conditions": conditions,
+            "action_redacted": phi_withheld,
         },
     )
     audit_log.record(entry)
@@ -471,6 +511,20 @@ def _risk_level(tier: str) -> int:
 
 def _max_risk(a: str, b: str) -> str:
     return _RISK_ORDER[max(_risk_level(a), _risk_level(b))]
+
+
+def _audit_action_summary(action_text: str, *, phi_withheld: bool) -> str:
+    """Return action text safe to persist in the audit trail.
+
+    When a privacy/PHI rule matched or a custom validator failed (leaving the
+    input unchecked for PHI), replace raw text with a non-reversible redacted
+    placeholder carrying a truncated SHA-256 digest and length so incidents
+    remain correlatable without storing raw PHI in the audit log.
+    """
+    if phi_withheld:
+        digest = hashlib.sha256(action_text.encode("utf-8")).hexdigest()[:16]
+        return f"[REDACTED:PHI_OR_UNCHECKED sha256={digest} len={len(action_text)}]"
+    return action_text[:500]
 
 
 def _highest_risk_from_violations(violations: list) -> str:

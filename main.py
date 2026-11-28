@@ -5,7 +5,12 @@ Usage:
     python -m clinicalguard.main
 
 Environment variables:
-    CLINICALGUARD_API_KEY      Required in production. Omit for local dev.
+    CLINICALGUARD_API_KEY      Required. Without it task requests get 401.
+    CLINICALGUARD_ALLOW_UNAUTHENTICATED
+                               Set to 1 to accept task requests with no API key.
+                               Local development only.
+    HOST                       Bind address for `python -m clinicalguard.main`.
+                               Default: 127.0.0.1
     CLINICALGUARD_AUDIT_LOG    Path to persist audit log JSON.
                                Default: $XDG_STATE_HOME/clinicalguard/clinicalguard_audit.json
                                (~/.local/state/... if unset). Startup fails if unwritable.
@@ -37,7 +42,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     uvicorn.run(
         "clinicalguard.main:app",
-        host="0.0.0.0",
+        host=os.environ.get("HOST", "127.0.0.1"),
         port=port,
         log_level="info",
     )
