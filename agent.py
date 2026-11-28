@@ -236,16 +236,16 @@ class ClinicalGuardApp:
         raw_api_key = os.environ.get("CLINICALGUARD_API_KEY", "")
         self._api_key = raw_api_key.strip()
         self._api_key_blank = bool(raw_api_key) and not self._api_key
+        self._allow_unauthenticated = (
+            os.environ.get("CLINICALGUARD_ALLOW_UNAUTHENTICATED", "").strip().lower()
+            in _TRUTHY
+        )
         if self._api_key_blank:
             logger.error(
                 "CLINICALGUARD_API_KEY is set but contains only whitespace: "
                 "all task requests are rejected until a real key is configured."
             )
-        self._allow_unauthenticated = (
-            os.environ.get("CLINICALGUARD_ALLOW_UNAUTHENTICATED", "").strip().lower()
-            in _TRUTHY
-        )
-        if not self._api_key:
+        elif not self._api_key:
             if self._allow_unauthenticated:
                 logger.warning(
                     "CLINICALGUARD_ALLOW_UNAUTHENTICATED is set and no CLINICALGUARD_API_KEY "

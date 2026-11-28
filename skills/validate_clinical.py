@@ -18,6 +18,7 @@ Constitutional Hash: 608508a9bd224290
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -359,7 +360,8 @@ async def validate_clinical_action(
     # privacy rule matched or a validator failed, whatever the severity. All
     # violations are inspected, not only the blocking ones.
     all_found = list(gov_result.violations) + list(warnings)
-    if any(_must_withhold_from_llm(v) for v in all_found):
+    phi_withheld = any(_must_withhold_from_llm(v) for v in all_found)
+    if phi_withheld:
         llm = LLMClinicalAssessment(
             llm_available=False,
             error="LLM withheld: input matched a PHI/privacy rule or a validator failed.",
@@ -448,7 +450,7 @@ async def validate_clinical_action(
         id=audit_id,
         type="clinical_validation",
         agent_id=proposer_id,
-        action=action_text[:500],
+        action=_audit_action_summary(action_text, phi_withheld=phi_withheld),
         valid=(decision == APPROVED),
         violations=[v.rule_id for v in (blocking + warnings)],
         constitutional_hash=constitutional_hash,
@@ -461,6 +463,7 @@ async def validate_clinical_action(
             "evidence_tier": llm.evidence_tier,
             "drug_interactions": llm.drug_interactions,
             "conditions": conditions,
+            "action_redacted": phi_withheld,
         },
     )
     audit_log.record(entry)
@@ -508,6 +511,20 @@ def _risk_level(tier: str) -> int:
 
 def _max_risk(a: str, b: str) -> str:
     return _RISK_ORDER[max(_risk_level(a), _risk_level(b))]
+
+
+def _audit_action_summary(action_text: str, *, phi_withheld: bool) -> str:
+    """Return action text safe to persist in the audit trail.
+
+    When a privacy/PHI rule matched or a custom validator failed (leaving the
+    input unchecked for PHI), replace raw text with a non-reversible redacted
+    placeholder carrying a truncated SHA-256 digest and length so incidents
+    remain correlatable without storing raw PHI in the audit log.
+    """
+    if phi_withheld:
+        digest = hashlib.sha256(action_text.encode("utf-8")).hexdigest()[:16]
+        return f"[REDACTED:PHI_OR_UNCHECKED sha256={digest} len={len(action_text)}]"
+    return action_text[:500]
 
 
 def _highest_risk_from_violations(violations: list) -> str:

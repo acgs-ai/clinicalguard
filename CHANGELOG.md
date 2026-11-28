@@ -16,7 +16,9 @@ All notable changes to ClinicalGuard are documented here.
 - **PHI is checked before the LLM is called.** `validate_clinical_action` now runs the constitutional rules
   first. Text that matches a privacy rule (HC-003 or a `PHI-*` validator) is not sent to the LLM provider;
   the response is rule-only with `llm_available: false`. Previously the text was sent to the model before
-  the rules ran. The same applies when a custom validator fails. The decision for text with detected
+  the rules ran. The same applies when a custom validator fails. When PHI is withheld (privacy match or
+  validator failure), the audit trail stores a SHA-256 redaction summary (`metadata["action_redacted"] = true`)
+  instead of raw input text. The decision for text with detected
   PHI is unchanged (REJECTED). A failed validator now also gives REJECTED; before, it could give
   CONDITIONAL when the LLM approved. In both cases the reported `confidence` is lower because no LLM
   assessment is included. Detection is pattern-based: PHI the patterns do not match is not covered.

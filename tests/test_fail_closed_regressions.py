@@ -158,6 +158,28 @@ class TestAuthFailsClosed:
         assert client.post("/", json=body).status_code == 401
         assert client.post("/", json=body, headers={"X-API-Key": "real-key"}).status_code == 200
 
+    def test_whitespace_key_with_opt_out_logs_only_error_not_unauthenticated_warning(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        import logging
+
+        monkeypatch.setenv("CLINICALGUARD_API_KEY", "   ")
+        monkeypatch.setenv("CLINICALGUARD_ALLOW_UNAUTHENTICATED", "1")
+        with caplog.at_level(logging.WARNING, logger="clinicalguard.agent"):
+            _client(tmp_path)
+        assert any(
+            r.levelno == logging.ERROR and "contains only whitespace" in r.message
+            for r in caplog.records
+        )
+        assert not any(
+            r.levelno == logging.WARNING
+            and (
+                "accepted without authentication" in r.message
+                or "No CLINICALGUARD_API_KEY configured" in r.message
+            )
+            for r in caplog.records
+        )
+
 
 # ── PHI check runs before the LLM ────────────────────────────────────────────
 
@@ -255,3 +277,63 @@ class TestPhiNeverReachesLlm:
             )
         llm.assert_not_awaited()
         assert resp.json()["result"]["result"]["decision"] == REJECTED
+
+    @pytest.mark.parametrize(
+        ("text", "secret_fragment"),
+        [
+            ("Prescribe metformin 500mg for patient SSN 123-45-6789.", "123-45-6789"),
+            ("Prescribe metformin 500mg. MRN: A12345.", "A12345"),
+        ],
+    )
+    def test_phi_input_is_redacted_in_audit_log_and_persisted_file(
+        self, tmp_path, monkeypatch, text, secret_fragment
+    ):
+        from clinicalguard.skills.audit_query import query_audit_trail
+
+        monkeypatch.setenv("CLINICALGUARD_ALLOW_UNAUTHENTICATED", "1")
+        audit_path = tmp_path / "audit.json"
+        guard = ClinicalGuardApp.create(audit_log_path=audit_path)
+        client = TestClient(guard.build_starlette_app(), raise_server_exceptions=False)
+        llm = AsyncMock(return_value=_APPROVING_LLM)
+        with patch(_LLM_PATH, llm):
+            resp = client.post("/", json=_a2a(f"validate_clinical_action: {text}"))
+        assert resp.json()["result"]["result"]["decision"] == REJECTED
+        assert len(guard.audit_log.entries) == 1
+        entry = guard.audit_log.entries[0]
+        assert entry.action.startswith("[REDACTED:PHI_OR_UNCHECKED sha256=")
+        assert secret_fragment not in entry.action
+        assert entry.metadata["action_redacted"] is True
+        assert guard.audit_log.verify_chain() is True
+        assert secret_fragment not in audit_path.read_text(encoding="utf-8")
+        queried = query_audit_trail(guard.audit_log, audit_id=entry.id)
+        assert queried["found"] is True
+        assert secret_fragment not in queried["entries"][0]["action"]
+
+    async def test_crashed_validator_input_is_redacted_in_audit_log(self, guard):
+        def boom(text, context):
+            raise RuntimeError("validator down")
+
+        guard.engine.add_validator(boom)
+        llm = AsyncMock(return_value=_APPROVING_LLM)
+        with patch(_LLM_PATH, llm):
+            await validate_clinical_action(
+                "Unchecked sensitive note for patient.",
+                engine=guard.engine,
+                audit_log=guard.audit_log,
+            )
+        entry = guard.audit_log.entries[0]
+        assert entry.action.startswith("[REDACTED:PHI_OR_UNCHECKED sha256=")
+        assert "Unchecked sensitive note" not in entry.action
+        assert entry.metadata["action_redacted"] is True
+
+    async def test_non_phi_input_is_not_redacted_in_audit_log(self, guard):
+        llm = AsyncMock(return_value=_APPROVING_LLM)
+        with patch(_LLM_PATH, llm):
+            await validate_clinical_action(
+                "Recommend annual wellness visit for SYNTH-001.",
+                engine=guard.engine,
+                audit_log=guard.audit_log,
+            )
+        entry = guard.audit_log.entries[0]
+        assert entry.action == "Recommend annual wellness visit for SYNTH-001."
+        assert entry.metadata["action_redacted"] is False
